@@ -1,0 +1,102 @@
+---
+- name: Install Clickhouse
+  hosts: clickhouse
+  handlers:
+    - name: Start clickhouse service
+      become: true
+      ansible.builtin.service:
+        name: clickhouse-server
+        state: restarted
+  tasks:
+    - name: Get clickhouse
+      block:
+        - name: Get clickhouse distrib
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/{{ item }}-{{ clickhouse_version }}.noarch.rpm"
+            dest: "./{{ item }}-{{ clickhouse_version }}.rpm"
+            mode: "0644"
+          with_items: "{{ clickhouse_packages }}"
+      rescue:
+        - name: Get clickhouse distrib
+          ansible.builtin.get_url:
+            url: "https://packages.clickhouse.com/rpm/stable/clickhouse-common-static-{{ clickhouse_version }}.x86_64.rpm"
+            dest: "./clickhouse-common-static-{{ clickhouse_version }}.rpm"
+            mode: "0644"
+    - name: Install clickhouse packages
+      become: true
+      ansible.builtin.yum:
+        name:
+          - clickhouse-common-static-{{ clickhouse_version }}.rpm
+          - clickhouse-client-{{ clickhouse_version }}.rpm
+          - clickhouse-server-{{ clickhouse_version }}.rpm
+      notify: Start clickhouse service
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+    - name: Create database
+      ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
+      register: create_db
+      failed_when: create_db.rc != 0 and create_db.rc != 82
+      changed_when: create_db.rc == 0
+  tags: clickhouse
+- name: Install Vector
+  hosts: clickhouse
+  vars_files:
+    - ./group_vars/vector/vars.yml
+  handlers:
+    - name: Start Vector service
+      become: true
+      ansible.builtin.service:
+        name: vector
+        state: restarted
+  tasks:
+    - name: Get vector version
+      ansible.builtin.command: vector --version
+      register: is_installed
+      ignore_errors: true
+      changed_when: false
+    - name: Create a directory Vector
+      become: true
+      ansible.builtin.file:
+        path: ./vector
+        state: directory
+        owner: netology
+        group: netology
+        mode: "0755"
+      when:
+        - is_installed is failed
+    - name: Copy rpm file to server
+      ansible.builtin.get_url:
+        url: "{{ vector_url }}"
+        dest: ./vector/vector-{{ vector_version }}-1.{{ vector_architecture }}.rpm
+        mode: "0700"
+      when:
+        - is_installed is failed
+    - name: Install package
+      become: true
+      ansible.builtin.yum:
+        disable_gpg_check: true
+        name: ./vector/vector-{{ vector_version }}-1.{{ vector_architecture }}.rpm
+        state: present
+      when:
+        - is_installed is failed
+    - name: Create vector config
+      become: true
+      ansible.builtin.template:
+        src: vector.yml.j2
+        dest: "{{ vector_config_dir }}/vector.yml"
+        mode: "0644"
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        validate: vector validate --no-environment --config-yaml %s
+    - name: Create vector systemd unit
+      become: true
+      register: is_installed
+      ansible.builtin.template:
+        src: vector.service.j2
+        dest: /usr/lib/systemd/system/vector.service
+        mode: "0644"
+        owner: "{{ ansible_user_id }}"
+        group: "{{ ansible_user_gid }}"
+        backup: true
+      notify: Start Vector service
+  tags: vector

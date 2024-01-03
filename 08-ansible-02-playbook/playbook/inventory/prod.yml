@@ -1,0 +1,11 @@
+---
+clickhouse:
+  hosts:
+    clickhouse-01:
+      ansible_host: 192.168.1.141
+all:
+  vars:
+    ansible_connection: ssh
+    ansible_ssh_pass: netology
+    ansible_sudo_pass: netology
+    ansible_user: netology
